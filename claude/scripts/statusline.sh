@@ -23,6 +23,7 @@ readonly GIT_PURPLE='\033[38;5;99m'
 readonly TOKENS_ORANGE='\033[38;5;208m'
 readonly CLOCK_PURPLE='\033[38;5;105m'
 
+
 # Derived constants
 readonly SEPARATOR="${GRAY}|${NC}"
 readonly NULL_VALUE="null"
@@ -167,7 +168,8 @@ parse_claude_input() {
     (.cost.total_lines_removed // 0),
     (.context_window.total_input_tokens // 0),
     (.context_window.total_output_tokens // 0),
-    (.cost.total_duration_ms // 0)
+    (.cost.total_duration_ms // 0),
+    (.effort.level // "")
   ' 2>/dev/null) || {
     echo "Error: Failed to parse JSON input" >&2
     return 1
@@ -363,10 +365,13 @@ EOF
 
 build_model_component() {
   local model_name="$1"
-  # Extract short name: claude-opus-4-5 from full model string like global.anthropic.claude-opus-4-5-20251101-v1:0
+  local effort_level="${2:-}"
+  # Strip "Claude " prefix and any parenthetical suffix e.g. " (1M context)"
   local short_name
-  short_name=$(echo "${model_name}" | awk -F'.' '{print $NF}' | cut -d'-' -f1-4)
-  echo "${CYAN}${short_name}${NC}"
+  short_name=$(echo "${model_name}" | sed 's/^Claude //; s/ (.*//')
+  local output="${CYAN}${short_name}${NC}"
+  [[ -n "${effort_level}" ]] && output+=" ${GRAY}(${effort_level})${NC}"
+  echo "${output}"
 }
 
 build_context_component() {
@@ -448,6 +453,19 @@ build_cost_component() {
   fi
 }
 
+build_litellm_component() {
+  local script_path="$(dirname "$0")/litellm-budget.sh"
+  [[ -x "$script_path" ]] || return 0
+  
+  # Run with --status for compact one-liner, suppress errors
+  local lightllm_budget
+  lightllm_budget=$("$script_path" --status 2>/dev/null) || return 0
+  [[ -n "$lightllm_budget" && "$lightllm_budget" != budget:* ]] || return 0
+  lightllm_budget=$(echo "$lightllm_budget" | sed 's/^\$//; s/ \/ /\//')
+
+  echo "💰 ${lightllm_budget}"
+}
+
 build_lines_component() {
   local lines_added="$1"
   local lines_removed="$2"
@@ -506,9 +524,10 @@ assemble_statusline() {
   local git_part="$4"
   local files_part="$5"
   local cost_part="$6"
-  local lines_part="$7"
-  local tokens_part="$8"
-  local duration_part="$9"
+  local lightllm_budget_part="$7"
+  local lines_part="$8"
+  local tokens_part="$9"
+  local duration_part="${10}"
 
   local separator
   separator=$(sep)
@@ -552,6 +571,7 @@ assemble_statusline() {
   [[ -n "${tokens_part}" || -n "${files_part}" ]] && line2+="${separator}$(pad_to_width "${files_part}" "${col3_width}")"
   [[ -n "${duration_part}" || -n "${lines_part}" ]] && line2+="${separator}$(pad_to_width "${lines_part}" "${col4_width}")"
   [[ -n "${cost_part}" ]] && line2+="${separator}${cost_part}"
+  [[ -n "${lightllm_budget_part}" ]] && line2+="${separator}${lightllm_budget_part}"
 
   echo -e "${line1}"
   echo -e "${line2}"
@@ -584,7 +604,7 @@ main() {
 
   # Extract fields
   local model_name current_dir context_size current_usage cost_usd lines_added lines_removed
-  local total_input_tokens total_output_tokens total_duration_ms
+  local total_input_tokens total_output_tokens total_duration_ms effort_level
   {
     read -r model_name
     read -r current_dir
@@ -596,13 +616,14 @@ main() {
     read -r total_input_tokens
     read -r total_output_tokens
     read -r total_duration_ms
+    read -r effort_level
   } << EOF
 ${parsed}
 EOF
 
   # Build components
   local model_part context_part dir_part git_part cost_part files_part lines_part tokens_part duration_part
-  model_part=$(build_model_component "${model_name}")
+  model_part=$(build_model_component "${model_name}" "${effort_level}")
   context_part=$(build_context_component "${context_size}" "${current_usage}")
   dir_part=$(build_directory_component "${current_dir}")
 
@@ -613,12 +634,13 @@ EOF
 
   files_part=$(build_files_component "${file_count}")
   cost_part=$(build_cost_component "${cost_usd}")
+  litellm_budget_part=$(build_litellm_component)
   lines_part=$(build_lines_component "${lines_added}" "${lines_removed}")
   tokens_part=$(build_tokens_component "${total_input_tokens}" "${total_output_tokens}")
   duration_part=$(build_duration_component "${total_duration_ms}")
 
   # Assemble and output (2 lines)
-  assemble_statusline "${model_part}" "${context_part}" "${dir_part}" "${git_part}" "${files_part}" "${cost_part}" "${lines_part}" "${tokens_part}" "${duration_part}"
+  assemble_statusline "${model_part}" "${context_part}" "${dir_part}" "${git_part}" "${files_part}" "${cost_part}" "${litellm_budget_part}" "${lines_part}" "${tokens_part}" "${duration_part}"
 }
 
 main "$@"
