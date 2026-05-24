@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# https://github.com/glauberlima/claude-code-statusline
+
 set -euo pipefail 2>/dev/null || set -eu  # Conditional pipefail for POSIX compatibility
 
 # ============================================================
